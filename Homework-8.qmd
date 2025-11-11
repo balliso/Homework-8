@@ -1,0 +1,65 @@
+---
+title: "Homework-8"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Read in Seoul Bike Data use read.csv; had to assign fileEncoding to get the dataset to load in
+bike_data <- read.csv("SeoulBikeData.csv", header = TRUE, fileEncoding = "latin1")
+```
+
+# EDA
+
+### Checking the Data
+
+```{r}
+# I'm starting by checking for missingness in the data using is.na to see the number of missing values. No missing values were found. 
+sum(is.na(bike_data))
+colSums(is.na(bike_data))
+```
+
+```{r}
+# Now I need to check the data structure. The numeric variables are numeric, but the categorical variables were read in as character strings, and the date is also character strings, so I need to convert both of those. I also checked the categorical variables for unique values, to confirm consistency in the dataset. 
+str(bike_data)
+summary(bike_data)
+unique(bike_data$Seasons)
+unique(bike_data$Holiday)
+unique(bike_data$Functioning.Day)
+```
+
+```{r}
+# Next, I need to convert the Date column into an actual date using lubridate.
+bike_data <- bike_data |>
+  mutate(Date = dmy(Date))
+# Checking if it worked
+head(bike_data$Date, 10)
+class(bike_data$Date)
+```
+  
+```{r}
+# Now I will convert the character variables into factors.
+bike_data <- bike_data |>
+  mutate(
+    Seasons = as.factor(Seasons),
+    Holiday = as.factor(Holiday),
+    Functioning.Day = as.factor(Functioning.Day)
+  )
+# Checking to see if it worked
+class(bike_data$Seasons)
+class(bike_data$Holiday)
+class(bike_data$Functioning.Day)
+```
+
+```{r}
+# Simplify column names to make them easier to work with 
+colnames(bike_data) <- (c("date", "bike_count", "hour", "temp", "humidity", "wind_speed", "visibility", "dew_point_temp", "solar_radiation", "rainfall", "snowfall", "seasons", "holiday", "functioning_day"))
+# Checking new names
+head(bike_data)
+```
+
+### Split the Data
+### Fitting MLR Models
