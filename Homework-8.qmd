@@ -9,6 +9,7 @@ library(tidyverse)
 library(lubridate)
 library(dplyr)
 library(tidymodels)
+library(broom)
 
 # Read in Seoul Bike Data use read.csv; had to assign fileEncoding to get the dataset to load in
 bike_data <- read.csv("SeoulBikeData.csv", header = TRUE, fileEncoding = "latin1")
@@ -24,7 +25,7 @@ colSums(is.na(bike_data))
 ```
 
 ```{r}
-# Now I need to check the data structure. The numeric variables are numeric, but the categorical variables were read in as character strings, and the date is also character strings, so I need to convert both of those. I also checked the categorical variables for unique values, to confirm consistency in the dataset. 
+# Now I need to check the data structure. The numeric variables are confirmed numeric, but the categorical variables were read in as character strings, and the date is also character strings, so I need to convert both of those. I also checked the categorical variables for unique values, to confirm consistency in the dataset. 
 str(bike_data)
 summary(bike_data)
 unique(bike_data$Seasons)
@@ -98,7 +99,7 @@ bike_summary <- bike_data |>
     rainfall = sum(rainfall),
     snowfall = sum(snowfall),
     # Find mean of all weather related variables
-    temperature = mean(temp),
+    temp = mean(temp),
     humidity = mean(humidity),
     wind_speed = mean(wind_speed),
     visibility = mean(visibility),
@@ -126,7 +127,7 @@ bike_summary |>
 # To visualize these patterns, I created scatterplots and boxplots to see both numeric and categorical relationships. 
 
 # Scatterplot - rentals vs temperature
-ggplot(bike_summary, aes(x = temperature, y = bike_count)) +
+ggplot(bike_summary, aes(x = temp, y = bike_count)) +
   geom_point(alpha = 0.6) +
   geom_smooth(method = "lm", se = FALSE, color = "blue") +
   labs(title = "Bike Rentals vs Temperature",
@@ -183,6 +184,137 @@ prop.table(table(bike_test$seasons))
 
 ### Fitting MLR Models
 ```{r}
-# Now I need to do a 10 fold split. I'll start with recipe 1. 
-
+# Now I need to do a 10 fold split. Beforehand, I'm going to use my date column to create a weekday/weekend variable for later use
+bike_train <- bike_train |>
+  mutate(
+    day_of_week = wday(date, label = TRUE, abbr = FALSE),  # e.g. Monday, Tuesday, ...
+    day_type = if_else(day_of_week %in% c("Saturday", "Sunday"), "Weekend", "Weekday"),
+    day_type = as.factor(day_type)
+  )
+bike_test <- bike_test |>
+  mutate(
+    day_of_week = wday(date, label = TRUE, abbr = FALSE),
+    day_type = if_else(day_of_week %in% c("Saturday", "Sunday"), "Weekend", "Weekday"),
+    day_type = as.factor(day_type)
+  )
+# Test to see if it worked
+glimpse(bike_test)
 ```
+
+#### Recipe 1
+```{r}
+# I'll start with recipe 1. 
+rec1 <- recipe(bike_count ~ ., data = bike_train) |>
+  # Remove date
+  update_role(date, new_role = "ID") |>
+  # Create dummy variables
+  step_dummy(all_nominal_predictors()) |>
+  # Standardize numeric variables
+  step_normalize(all_numeric_predictors())
+# I wanted to check if the recipe worked here, so I checked and then commented it out. 
+#rec1_prep <- prep(rec1)
+#baked_data <- bake(rec1_prep, new_data = NULL)
+#glimpse(baked_data)
+#summary(rec1_prep)
+```
+
+#### Recipe 2
+```{r}
+# Next up is recipe 2. I did the same steps as before, but this time I added in interactions between seasons and holiday, seasons and temp, and temp and rainfall. I used starts with() for my seasons and holiday variables.
+rec2 <- recipe(bike_count ~ ., data = bike_train) |>
+  update_role(date, new_role = "ID") |>
+  step_dummy(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  # Interactions
+  step_interact(terms = ~ starts_with("seasons_"):starts_with("holiday_") + starts_with("seasons_"):temp + temp:rainfall)
+```
+
+#### Recipe 3
+```{r}
+# For recipe 3, I did the same steps as in rec1 and rec2, but this time I added in quadratic terms for each numeric predictor with degree = 2, which allows my model to capture non-linear relationships between weather variables and bike rentals. To do this, I tried to use all_numeric_predictors(), but found that it wouldn't work because I was trying to apply step_poly() to variables that weren't continous numeric variables. I updated this to specify each variable I want to add in quadratic terms for.
+rec3 <- recipe(bike_count ~ ., data = bike_train) |>
+  update_role(date, new_role = "ID") |>
+  step_dummy(all_nominal_predictors()) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_interact(terms = ~ starts_with("seasons_"):starts_with("holiday_") + starts_with("seasons_"):temp + temp:rainfall) |>
+  step_poly(temp, humidity, wind_speed, visibility,
+            dew_point_temp, solar_radiation, rainfall, degree = 2)
+# Check that it works
+#rec3_prep <- prep(rec3)
+#baked_rec3 <- bake(rec3_prep, new_data = NULL)
+#glimpse(baked_rec3)
+```
+
+### Fit the Models
+```{r}
+# Now I need to fit the multiple linear regression models using 10 fold cross validation on the training set. 
+
+set.seed(123)
+bike_folds <- vfold_cv(bike_train, v = 10, strata = seasons)
+
+# Define model specification
+lm_spec <- linear_reg() |>
+  set_engine("lm")
+
+# Model 1
+set.seed(123)
+lm_fit1 <- workflow() |>
+  add_model(lm_spec) |>
+  add_recipe(rec1) |>
+  fit_resamples(resamples = bike_folds,
+                metrics = metric_set(rmse, rsq),
+                control = control_resamples(save_pred = TRUE))
+
+# Model 2
+set.seed(123)
+lm_fit2 <- workflow() |>
+  add_model(lm_spec) |>
+  add_recipe(rec2) |>
+  fit_resamples(resamples = bike_folds,
+                metrics = metric_set(rmse, rsq),
+                control = control_resamples(save_pred = TRUE))
+
+# Model 3
+set.seed(123)
+lm_fit3 <- workflow() |>
+  add_model(lm_spec) |>
+  add_recipe(rec3) |>
+  fit_resamples(resamples = bike_folds,
+                metrics = metric_set(rmse, rsq),
+                control = control_resamples(save_pred = TRUE))
+
+# Compare the models
+collect_metrics(lm_fit1)
+collect_metrics(lm_fit2)
+collect_metrics(lm_fit3)
+
+# Combine models into comparison table
+model_results <- bind_rows(
+  collect_metrics(lm_fit1) |> mutate(model = "Basic"),
+  collect_metrics(lm_fit2) |> mutate(model = "Interactions"),
+  collect_metrics(lm_fit3) |> mutate(model = "Interactions + Quadratics")
+)
+model_results
+
+# After comparing the results of the multiple linear regression models, I found that model 1 (using basic predictors) produced an RMSE of 4193 and RSQ of .83, model 2 (adding interaction terms) produced RMSE of 3144 and RSQ of .90, and model 3 (adding quadratic terms) produced RMSE of 3030 and RSQ of .91 indicating the best predictive performance. I selected model 3 as the final model to fit and evaluate. 
+```
+
+```{r}
+# Fit the best model to the full training set
+final_wf <- workflow() |>
+  add_model(lm_spec) |>
+  add_recipe(rec3)
+final_fit <- final_wf |>
+  fit(data = bike_train)
+# Predict on test data
+final_predictions <- predict(final_fit, new_data = bike_test) |>
+  bind_cols(bike_test |> select(bike_count))
+# Compute RMSE metric on test set
+metrics(final_predictions, truth = bike_count, estimate = .pred)
+# Extract fitted model 
+final_fit_extract <- extract_fit_parsnip(final_fit)
+tidy(final_fit_extract)
+
+# I extracted the fitted linear model from the workflow using extract_fit_parsnip() and displayed the coefficients using tidy(). The resulting table shows the estimated effects of each predictor on bike rentals. Overall, the model captures realistic relationships between environmental conditions and cycling demand, providing a strong predictive framework for future rental forecasting.
+```
+
