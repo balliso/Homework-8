@@ -7,6 +7,8 @@ editor: visual
 ```{r}
 library(tidyverse)
 library(lubridate)
+library(dplyr)
+library(tidymodels)
 
 # Read in Seoul Bike Data use read.csv; had to assign fileEncoding to get the dataset to load in
 bike_data <- read.csv("SeoulBikeData.csv", header = TRUE, fileEncoding = "latin1")
@@ -15,7 +17,6 @@ bike_data <- read.csv("SeoulBikeData.csv", header = TRUE, fileEncoding = "latin1
 # EDA
 
 ### Checking the Data
-
 ```{r}
 # I'm starting by checking for missingness in the data using is.na to see the number of missing values. No missing values were found. 
 sum(is.na(bike_data))
@@ -61,5 +62,127 @@ colnames(bike_data) <- (c("date", "bike_count", "hour", "temp", "humidity", "win
 head(bike_data)
 ```
 
-### Split the Data
+### Summary Statistics
+```{r}
+summary(bike_data)
+
+# Next, I will run some summary statistics on the bike data. I want to see the mean, median, standard deviation, and IQR for each variable. This code shows the summary statistics for all of the numeric variables. 
+bike_data |>
+  summarise(across(where(is.numeric), list("mean" = mean, "median" = median, "sd" = sd, "iqr" = IQR), .names = "{.fn}_{.col}"))
+
+# I also want to see summary statistics for the categorical variables, so I will run each of these separately for seasons, holiday, and functioning day. 
+bike_data |>
+  group_by(seasons) |>
+  summarise(across(where(is.numeric), list("mean" = mean, "median" = median, "sd" = sd, "iqr" = IQR), .names = "{.fn}_{.col}"))
+
+bike_data |>
+  group_by(holiday) |>
+  summarise(across(where(is.numeric), list("mean" = mean, "median" = median, "sd" = sd, "iqr" = IQR), .names = "{.fn}_{.col}"))
+
+bike_data |>
+  group_by(functioning_day) |>
+  summarise(across(where(is.numeric), list("mean" = mean, "median" = median, "sd" = sd, "iqr" = IQR), .names = "{.fn}_{.col}"))
+
+#After running the functioning day code, I noticed that the rental count was zero on non-functional days, so I decided to remove these observations from the dataset before further analysis.
+bike_data <- bike_data |>
+  filter(functioning_day == "Fun" | functioning_day == "Yes")
+```
+
+```{r}
+# Now I will summarize across the hours so each day has only one observation, to simplify the analysis. 
+bike_summary <- bike_data |>
+  group_by(date, seasons, holiday) |>
+  summarise(
+    # Find sum of bike count, rainfall, and snowfall
+    bike_count = sum(bike_count),
+    rainfall = sum(rainfall),
+    snowfall = sum(snowfall),
+    # Find mean of all weather related variables
+    temperature = mean(temp),
+    humidity = mean(humidity),
+    wind_speed = mean(wind_speed),
+    visibility = mean(visibility),
+    dew_point_temp = mean(dew_point_temp),
+    solar_radiation = mean(solar_radiation),
+    .groups = "drop"
+  )
+# Check if that worked
+bike_summary
+```
+
+### New Dataset - Summary Stats and Plots
+```{r}
+# Starting with this updated dataset, I will first do some summary stats. I found that the bike count variable ranged widely between days, and the weather variables showed reasonable daily averages and variability.
+bike_summary |>
+  summarise(across(where(is.numeric), list("mean" = mean, "median" = median, "sd" = sd, "iqr" = IQR), .names = "{.fn}_{.col}"))
+
+# Next, I calculated correlations between all numeric variables to identify which weather factors were most associated with bike rentals. 
+bike_summary |>
+  select(where(is.numeric)) |>
+  cor(use = "complete.obs") |>
+  round(2)
+# The correlation matrix showed a few relationships. Bike rentals were strongly positively correlated with temperature, while humidity and rainfall showed negative correlations with rental counts. Other variables had weaker correlations, implying they have less influence on bike rentals. 
+
+# To visualize these patterns, I created scatterplots and boxplots to see both numeric and categorical relationships. 
+
+# Scatterplot - rentals vs temperature
+ggplot(bike_summary, aes(x = temperature, y = bike_count)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Bike Rentals vs Temperature",
+       x = "Average Temperature °C",
+       y = "Daily Bike Rentals")
+# Scatterplot - rentals vs humidity
+ggplot(bike_summary, aes(x = humidity, y = bike_count)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Bike Rentals vs Humidity",
+       x = "Average Humidity (%)",
+       y = "Daily Bike Rentals")
+# Boxplot - rentals vs seasons
+ggplot(bike_summary, aes(x = seasons, y = bike_count, fill = seasons)) +
+  geom_boxplot() +
+  labs(title = "Bike Rentals by Season",
+       x = "Season",
+       y = "Daily Bike Rentals") +
+  theme(legend.position = "none")
+# Boxplot - rentals vs holidays
+ggplot(bike_summary, aes(x = holiday, y = bike_count, fill = holiday)) +
+  geom_boxplot() +
+  labs(title = "Bike Rentals on Holidays vs Non-Holidays",
+       x = "Holiday Status",
+       y = "Daily Bike Rentals") +
+  theme(legend.position = "none")
+# These plots all supported the correlations observed earlier. 
+```
+
+# Split the Data
+
+### 75/25 Split
+```{r}
+# Now, I want to split the cleaned and summarized dataset into training and testing subsets. I will set a seed value to ensure my results will be reproducible.
+set.seed(123)
+
+# 75/25 split, stratify by seasons
+bike_split <- initial_split(bike_summary, 
+                            prop = 0.75, 
+                            strata = seasons)
+
+# Create the two datasets
+bike_train <- training(bike_split)
+bike_test  <- testing(bike_split)
+
+# Check sizes
+nrow(bike_train)
+nrow(bike_test)
+
+# Check distribution of seasons
+prop.table(table(bike_train$seasons))
+prop.table(table(bike_test$seasons))
+```
+
 ### Fitting MLR Models
+```{r}
+# Now I need to do a 10 fold split. I'll start with recipe 1. 
+
+```
